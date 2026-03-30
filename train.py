@@ -90,8 +90,25 @@ class CausalSelfAttention(nn.Module):
         q, k = apply_rotary_emb(q, cos, sin), apply_rotary_emb(k, cos, sin)
         q, k = norm(q), norm(k)
 
-        y = fa3.flash_attn_func(q, k, v, causal=True, window_size=window_size)
-        y = y.contiguous().view(B, T, -1)
+        # Transpose for scaled_dot_product_attention: (B, n_head, T, head_dim)
+        q = q.transpose(1, 2)
+        k = k.transpose(1, 2)
+        v = v.transpose(1, 2)
+
+        # Handle GQA: repeat k and v if n_kv_head < n_head
+        if self.n_kv_head != self.n_head:
+            n_rep = self.n_head // self.n_kv_head
+            k = k.repeat(1, n_rep, 1, 1)
+            v = v.repeat(1, n_rep, 1, 1)
+
+        # Create sliding window mask
+        mask = torch.full((T, T), float('-inf'), device=q.device, dtype=q.dtype)
+        for i in range(T):
+            start = max(0, i - window_size + 1)
+            mask[i, start:i+1] = 0
+
+        y = F.scaled_dot_product_attention(q, k, v, attn_mask=mask)
+        y = y.transpose(1, 2).contiguous().view(B, T, -1)
         y = self.c_proj(y)
         return y
 
