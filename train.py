@@ -102,6 +102,8 @@ class CausalSelfAttention(nn.Module):
             v = v.repeat(1, n_rep, 1, 1)
 
         # Create sliding window mask
+        if isinstance(window_size, tuple):
+            window_size = window_size[0]
         mask = torch.full((T, T), float('-inf'), device=q.device, dtype=q.dtype)
         for i in range(T):
             start = max(0, i - window_size + 1)
@@ -193,9 +195,9 @@ class GPT(nn.Module):
         cos, sin = self._precompute_rotary_embeddings(self.rotary_seq_len, head_dim)
         self.cos, self.sin = cos, sin
         # Cast embeddings to bf16
-        self.transformer.wte.to(dtype=torch.bfloat16)
+        self.transformer.wte.to(dtype=torch.float16)
         for ve in self.value_embeds.values():
-            ve.to(dtype=torch.bfloat16)
+            ve.to(dtype=torch.float16)
 
     def _precompute_rotary_embeddings(self, seq_len, head_dim, base=10000, device=None):
         if device is None:
@@ -447,7 +449,7 @@ class MuonAdamW(torch.optim.Optimizer):
 # ---------------------------------------------------------------------------
 
 # Model architecture
-ASPECT_RATIO = 64       # model_dim = depth * ASPECT_RATIO
+ASPECT_RATIO = 32       # model_dim = depth * ASPECT_RATIO (reduced from 64 to save memory)
 HEAD_DIM = 128          # target head dimension for attention
 WINDOW_PATTERN = "SSSL" # sliding window pattern: L=full, S=half context
 
@@ -465,7 +467,7 @@ FINAL_LR_FRAC = 0.0     # final LR as fraction of initial
 
 # Model size
 DEPTH = 8               # number of transformer layers
-DEVICE_BATCH_SIZE = 128  # per-device batch size (reduce if OOM)
+DEVICE_BATCH_SIZE = 64  # per-device batch size (reduced from 128 to save memory)
 
 # ---------------------------------------------------------------------------
 # Setup: tokenizer, model, optimizer, dataloader
@@ -476,7 +478,7 @@ torch.manual_seed(42)
 torch.cuda.manual_seed(42)
 torch.set_float32_matmul_precision("high")
 device = torch.device("cuda")
-autocast_ctx = torch.amp.autocast(device_type="cuda", dtype=torch.bfloat16)
+autocast_ctx = torch.amp.autocast(device_type="cuda", dtype=torch.float16)
 H100_BF16_PEAK_FLOPS = 989.5e12
 
 tokenizer = Tokenizer.from_directory()
@@ -498,7 +500,7 @@ print(f"Model config: {asdict(config)}")
 
 with torch.device("meta"):
     model = GPT(config)
-model.to_empty(device=device)
+model.to_empty(device=device).to(dtype=torch.float16)
 model.init_weights()
 
 param_counts = model.num_scaling_params()
